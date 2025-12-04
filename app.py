@@ -306,6 +306,9 @@ def init_session_state():
         st.session_state.pending_images = None
     if "pending_mode" not in st.session_state:
         st.session_state.pending_mode = None
+    # 履歴機能用
+    if "image_history" not in st.session_state:
+        st.session_state.image_history = []  # [{"image": PIL.Image, "prompt": str, "timestamp": str}, ...]
 
 
 def main():
@@ -452,6 +455,15 @@ def main():
                 generated_image = generate_with_gemini(client, prompt)
                 st.session_state.text_generated_image = generated_image
                 st.session_state.text_generation_complete = True
+
+            # 履歴に追加（生成成功時のみ）
+            if generated_image is not None:
+                from datetime import datetime
+                st.session_state.image_history.insert(0, {
+                    "image": generated_image,
+                    "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                    "timestamp": datetime.now().strftime("%H:%M:%S")
+                })
 
             # 生成完了後、元のモードを維持
             st.session_state.current_mode = pending_mode
@@ -731,6 +743,47 @@ def main():
             else:
                 st.error("❌ 画像の生成に失敗しました。別のプロンプトを試してください。")
 
+    # --- 履歴セクション ---
+    if st.session_state.image_history:
+        st.divider()
+        st.subheader("📜 生成履歴")
+
+        # 履歴をグリッド表示（3列）
+        cols_per_row = 3
+        for i in range(0, len(st.session_state.image_history), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for j, col in enumerate(cols):
+                idx = i + j
+                if idx < len(st.session_state.image_history):
+                    item = st.session_state.image_history[idx]
+                    with col:
+                        st.image(item["image"], use_container_width=True)
+                        st.caption(f"🕐 {item['timestamp']}")
+                        st.caption(f"📝 {item['prompt'][:30]}..." if len(item['prompt']) > 30 else f"📝 {item['prompt']}")
+
+                        # ダウンロードと削除ボタン
+                        col_dl, col_del = st.columns(2)
+                        with col_dl:
+                            buf = io.BytesIO()
+                            item["image"].save(buf, format="PNG")
+                            st.download_button(
+                                label="📥",
+                                data=buf.getvalue(),
+                                file_name=f"image_{idx}.png",
+                                mime="image/png",
+                                key=f"dl_hist_{idx}",
+                                use_container_width=True
+                            )
+                        with col_del:
+                            if st.button("🗑️", key=f"del_hist_{idx}", use_container_width=True):
+                                st.session_state.image_history.pop(idx)
+                                st.rerun()
+
+        # 履歴全削除ボタン
+        st.divider()
+        if st.button("🗑️ 履歴を全て削除", type="secondary"):
+            st.session_state.image_history = []
+            st.rerun()
 
 
 if __name__ == "__main__":
