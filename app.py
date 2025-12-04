@@ -9,8 +9,6 @@ Streamlit + Google Gemini API
 
 import os
 import io
-import json
-import base64
 import hashlib
 from datetime import datetime
 from PIL import Image, ExifTags
@@ -40,128 +38,6 @@ MODELS = {
     "gemini_image": "nano-banana-pro-preview", # Gemini画像生成（日本語対応）
     "imagen": "imagen-4.0-generate-001",       # Imagen画像生成（写真風）
 }
-
-# 履歴の最大保存枚数
-MAX_HISTORY_SIZE = 20
-
-
-def pil_to_base64(image: Image.Image, max_size: int = 512) -> str:
-    """PIL ImageをBase64文字列に変換（サイズ縮小してストレージ節約）"""
-    # サムネイルサイズに縮小
-    img_copy = image.copy()
-    img_copy.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-
-    buf = io.BytesIO()
-    img_copy.save(buf, format="JPEG", quality=85)
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
-
-
-def base64_to_pil(base64_str: str) -> Image.Image:
-    """Base64文字列をPIL Imageに変換"""
-    image_data = base64.b64decode(base64_str)
-    return Image.open(io.BytesIO(image_data))
-
-
-def save_history_to_localstorage(history: list):
-    """履歴をLocalStorageに保存（st.markdownでJS実行）"""
-    # PIL ImageをBase64に変換
-    serialized = []
-    for item in history[:MAX_HISTORY_SIZE]:  # 最大枚数制限
-        serialized.append({
-            "image_base64": pil_to_base64(item["image"]),
-            "prompt": item["prompt"],
-            "timestamp": item["timestamp"]
-        })
-
-    json_str = json.dumps(serialized)
-    # エスケープ処理
-    json_str_escaped = json_str.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
-
-    # st.markdownでJavaScriptを実行（親ウィンドウのLocalStorageにアクセス）
-    st.markdown(
-        f"""
-        <script>
-        (function() {{
-            try {{
-                const data = `{json_str_escaped}`;
-                localStorage.setItem('image_history', data);
-            }} catch(e) {{
-                console.error('LocalStorage save error:', e);
-            }}
-        }})();
-        </script>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-def load_history_from_localstorage():
-    """LocalStorageから履歴を読み込み（query paramsを使った双方向通信）"""
-    # URLパラメータから履歴データを取得（JSから送信される）
-    params = st.query_params
-    if "history_data" in params:
-        try:
-            # URLパラメータから取得してデコード
-            import urllib.parse
-            encoded_data = params["history_data"]
-            json_str = urllib.parse.unquote(encoded_data)
-            serialized = json.loads(json_str)
-            history = []
-            for item in serialized:
-                history.append({
-                    "image": base64_to_pil(item["image_base64"]),
-                    "prompt": item["prompt"],
-                    "timestamp": item["timestamp"]
-                })
-            # パラメータをクリア
-            st.query_params.clear()
-            return history
-        except Exception:
-            st.query_params.clear()
-            return []
-
-    # 初回読み込み：st.markdownでJS実行（親ウィンドウのLocalStorageにアクセス）
-    st.markdown(
-        """
-        <script>
-        (function() {
-            try {
-                const data = localStorage.getItem('image_history');
-                if (data && data !== 'null' && !window.location.search.includes('history_data')) {
-                    const encoded = encodeURIComponent(data);
-                    // データが大きすぎる場合はスキップ（URL長制限）
-                    if (encoded.length < 30000) {
-                        window.location.href = window.location.pathname + '?history_data=' + encoded;
-                    }
-                }
-            } catch(e) {
-                console.error('LocalStorage load error:', e);
-            }
-        })();
-        </script>
-        """,
-        unsafe_allow_html=True
-    )
-    return None  # 読み込み中（JSがリダイレクトする）
-
-
-def clear_localstorage_history():
-    """LocalStorageの履歴をクリア"""
-    st.markdown(
-        """
-        <script>
-        (function() {
-            try {
-                localStorage.removeItem('image_history');
-            } catch(e) {
-                console.error('LocalStorage clear error:', e);
-            }
-        })();
-        </script>
-        """,
-        unsafe_allow_html=True
-    )
-
 
 def get_client(api_key: str) -> genai_client.Client:
     """Google GenAI クライアントを作成"""
@@ -552,18 +428,6 @@ def main():
     # セッション初期化
     init_session_state()
 
-    # LocalStorageから履歴を読み込み（JSが準備できるまで繰り返す）
-    if not st.session_state.history_loaded:
-        loaded_history = load_history_from_localstorage()
-        if loaded_history is None:
-            # JSがまだ実行されていない - 再レンダリングを待つ
-            pass
-        else:
-            # 読み込み完了（空配列でも完了）
-            if loaded_history:
-                st.session_state.image_history = loaded_history
-            st.session_state.history_loaded = True
-
     # 生成中はオーバーレイを表示して処理を実行
     if st.session_state.is_generating:
         st.markdown("""
@@ -601,11 +465,9 @@ def main():
                     "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
                     "timestamp": datetime.now().strftime("%H:%M:%S")
                 })
-                # 最大枚数を超えたら古いものを削除
-                if len(st.session_state.image_history) > MAX_HISTORY_SIZE:
-                    st.session_state.image_history = st.session_state.image_history[:MAX_HISTORY_SIZE]
-                # LocalStorageに保存
-                save_history_to_localstorage(st.session_state.image_history)
+                # 最大枚数を超えたら古いものを削除（20枚まで）
+                if len(st.session_state.image_history) > 20:
+                    st.session_state.image_history = st.session_state.image_history[:20]
 
             # 生成完了後、元のモードを維持
             st.session_state.current_mode = pending_mode
@@ -919,16 +781,12 @@ def main():
                         with col_del:
                             if st.button("🗑️", key=f"del_hist_{idx}", use_container_width=True):
                                 st.session_state.image_history.pop(idx)
-                                # LocalStorageも更新
-                                save_history_to_localstorage(st.session_state.image_history)
                                 st.rerun()
 
         # 履歴全削除ボタン
         st.divider()
         if st.button("🗑️ 履歴を全て削除", type="secondary"):
             st.session_state.image_history = []
-            # LocalStorageもクリア
-            clear_localstorage_history()
             st.rerun()
 
 
