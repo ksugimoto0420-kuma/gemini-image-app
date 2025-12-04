@@ -734,18 +734,6 @@ def main():
     # --- フッター: 設定 ---
     st.divider()
     with st.expander("⚙️ 設定", expanded=False):
-        new_api_key = st.text_input(
-            "Google APIキー",
-            value=st.session_state.api_key,
-            type="password",
-            help="Google AI StudioからAPIキーを取得してください"
-        )
-        if new_api_key != st.session_state.api_key:
-            st.session_state.api_key = new_api_key
-            st.rerun()
-
-        st.divider()
-
         st.caption(f"**使用モデル:** `{MODELS['gemini_image']}` (思考モード)")
 
         st.divider()
