@@ -9,12 +9,16 @@ Streamlit + Google Gemini API
 
 import os
 import io
+import json
+import base64
 import hashlib
+from datetime import datetime
 from PIL import Image, ExifTags
 import streamlit as st
 from dotenv import load_dotenv
 from google import genai as genai_client
 from google.genai import types as genai_types
+from streamlit_js_eval import streamlit_js_eval
 
 # .envファイルから環境変数を読み込む（ローカル開発用）
 load_dotenv()
@@ -37,6 +41,68 @@ MODELS = {
     "gemini_image": "nano-banana-pro-preview", # Gemini画像生成（日本語対応）
     "imagen": "imagen-4.0-generate-001",       # Imagen画像生成（写真風）
 }
+
+# 履歴の最大保存枚数
+MAX_HISTORY_SIZE = 20
+
+
+def pil_to_base64(image: Image.Image, max_size: int = 512) -> str:
+    """PIL ImageをBase64文字列に変換（サイズ縮小してストレージ節約）"""
+    # サムネイルサイズに縮小
+    img_copy = image.copy()
+    img_copy.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+    buf = io.BytesIO()
+    img_copy.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def base64_to_pil(base64_str: str) -> Image.Image:
+    """Base64文字列をPIL Imageに変換"""
+    image_data = base64.b64decode(base64_str)
+    return Image.open(io.BytesIO(image_data))
+
+
+def save_history_to_localstorage(history: list):
+    """履歴をLocalStorageに保存"""
+    # PIL ImageをBase64に変換
+    serialized = []
+    for item in history[:MAX_HISTORY_SIZE]:  # 最大枚数制限
+        serialized.append({
+            "image_base64": pil_to_base64(item["image"]),
+            "prompt": item["prompt"],
+            "timestamp": item["timestamp"]
+        })
+
+    json_str = json.dumps(serialized)
+    # JavaScriptでLocalStorageに保存
+    streamlit_js_eval(js_expressions=f"localStorage.setItem('image_history', '{json_str}')", key="save_history")
+
+
+def load_history_from_localstorage() -> list:
+    """LocalStorageから履歴を読み込み"""
+    result = streamlit_js_eval(js_expressions="localStorage.getItem('image_history')", key="load_history")
+
+    if result is None or result == "null":
+        return []
+
+    try:
+        serialized = json.loads(result)
+        history = []
+        for item in serialized:
+            history.append({
+                "image": base64_to_pil(item["image_base64"]),
+                "prompt": item["prompt"],
+                "timestamp": item["timestamp"]
+            })
+        return history
+    except Exception:
+        return []
+
+
+def clear_localstorage_history():
+    """LocalStorageの履歴をクリア"""
+    streamlit_js_eval(js_expressions="localStorage.removeItem('image_history')", key="clear_history")
 
 
 def get_client(api_key: str) -> genai_client.Client:
@@ -306,9 +372,11 @@ def init_session_state():
         st.session_state.pending_images = None
     if "pending_mode" not in st.session_state:
         st.session_state.pending_mode = None
-    # 履歴機能用
+    # 履歴機能用（LocalStorageからの読み込みはmainで行う）
     if "image_history" not in st.session_state:
         st.session_state.image_history = []  # [{"image": PIL.Image, "prompt": str, "timestamp": str}, ...]
+    if "history_loaded" not in st.session_state:
+        st.session_state.history_loaded = False
 
 
 def main():
@@ -426,6 +494,13 @@ def main():
     # セッション初期化
     init_session_state()
 
+    # LocalStorageから履歴を読み込み（初回のみ）
+    if not st.session_state.history_loaded:
+        loaded_history = load_history_from_localstorage()
+        if loaded_history:
+            st.session_state.image_history = loaded_history
+        st.session_state.history_loaded = True
+
     # 生成中はオーバーレイを表示して処理を実行
     if st.session_state.is_generating:
         st.markdown("""
@@ -458,12 +533,16 @@ def main():
 
             # 履歴に追加（生成成功時のみ）
             if generated_image is not None:
-                from datetime import datetime
                 st.session_state.image_history.insert(0, {
                     "image": generated_image,
                     "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
                     "timestamp": datetime.now().strftime("%H:%M:%S")
                 })
+                # 最大枚数を超えたら古いものを削除
+                if len(st.session_state.image_history) > MAX_HISTORY_SIZE:
+                    st.session_state.image_history = st.session_state.image_history[:MAX_HISTORY_SIZE]
+                # LocalStorageに保存
+                save_history_to_localstorage(st.session_state.image_history)
 
             # 生成完了後、元のモードを維持
             st.session_state.current_mode = pending_mode
@@ -777,12 +856,16 @@ def main():
                         with col_del:
                             if st.button("🗑️", key=f"del_hist_{idx}", use_container_width=True):
                                 st.session_state.image_history.pop(idx)
+                                # LocalStorageも更新
+                                save_history_to_localstorage(st.session_state.image_history)
                                 st.rerun()
 
         # 履歴全削除ボタン
         st.divider()
         if st.button("🗑️ 履歴を全て削除", type="secondary"):
             st.session_state.image_history = []
+            # LocalStorageもクリア
+            clear_localstorage_history()
             st.rerun()
 
 
