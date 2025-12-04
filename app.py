@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from google import genai as genai_client
 from google.genai import types as genai_types
 from streamlit_js_eval import streamlit_js_eval
+import streamlit.components.v1 as components
 
 # .envファイルから環境変数を読み込む（ローカル開発用）
 load_dotenv()
@@ -75,34 +76,63 @@ def save_history_to_localstorage(history: list):
         })
 
     json_str = json.dumps(serialized)
-    # JavaScriptでLocalStorageに保存
-    streamlit_js_eval(js_expressions=f"localStorage.setItem('image_history', '{json_str}')", key="save_history")
+    # エスケープ処理（シングルクォート対策）
+    json_str_escaped = json_str.replace("\\", "\\\\").replace("'", "\\'")
+    # JavaScriptでLocalStorageに保存（ユニークキーで毎回実行）
+    key = f"save_history_{datetime.now().timestamp()}"
+    streamlit_js_eval(js_expressions=f"localStorage.setItem('image_history', '{json_str_escaped}')", key=key)
 
 
-def load_history_from_localstorage() -> list:
-    """LocalStorageから履歴を読み込み"""
-    result = streamlit_js_eval(js_expressions="localStorage.getItem('image_history')", key="load_history")
+def load_history_from_localstorage():
+    """LocalStorageから履歴を読み込み（query paramsを使った双方向通信）"""
+    # URLパラメータから履歴データを取得（JSから送信される）
+    params = st.query_params
+    if "history_data" in params:
+        try:
+            # URLパラメータから取得してデコード
+            import urllib.parse
+            encoded_data = params["history_data"]
+            json_str = urllib.parse.unquote(encoded_data)
+            serialized = json.loads(json_str)
+            history = []
+            for item in serialized:
+                history.append({
+                    "image": base64_to_pil(item["image_base64"]),
+                    "prompt": item["prompt"],
+                    "timestamp": item["timestamp"]
+                })
+            # パラメータをクリア
+            st.query_params.clear()
+            return history
+        except Exception:
+            st.query_params.clear()
+            return []
 
-    if result is None or result == "null":
-        return []
-
-    try:
-        serialized = json.loads(result)
-        history = []
-        for item in serialized:
-            history.append({
-                "image": base64_to_pil(item["image_base64"]),
-                "prompt": item["prompt"],
-                "timestamp": item["timestamp"]
-            })
-        return history
-    except Exception:
-        return []
+    # 初回読み込み：JSでLocalStorageを読み込んでURLパラメータに設定
+    components.html(
+        """
+        <script>
+        (function() {
+            const data = localStorage.getItem('image_history');
+            if (data && data !== 'null' && !window.location.search.includes('history_data')) {
+                const encoded = encodeURIComponent(data);
+                // データが大きすぎる場合はスキップ（URL長制限）
+                if (encoded.length < 30000) {
+                    window.location.href = window.location.pathname + '?history_data=' + encoded;
+                }
+            }
+        })();
+        </script>
+        """,
+        height=0
+    )
+    return None  # 読み込み中（JSがリダイレクトする）
 
 
 def clear_localstorage_history():
     """LocalStorageの履歴をクリア"""
-    streamlit_js_eval(js_expressions="localStorage.removeItem('image_history')", key="clear_history")
+    key = f"clear_history_{datetime.now().timestamp()}"
+    streamlit_js_eval(js_expressions="localStorage.removeItem('image_history')", key=key)
 
 
 def get_client(api_key: str) -> genai_client.Client:
@@ -494,12 +524,17 @@ def main():
     # セッション初期化
     init_session_state()
 
-    # LocalStorageから履歴を読み込み（初回のみ）
+    # LocalStorageから履歴を読み込み（JSが準備できるまで繰り返す）
     if not st.session_state.history_loaded:
         loaded_history = load_history_from_localstorage()
-        if loaded_history:
-            st.session_state.image_history = loaded_history
-        st.session_state.history_loaded = True
+        if loaded_history is None:
+            # JSがまだ実行されていない - 再レンダリングを待つ
+            pass
+        else:
+            # 読み込み完了（空配列でも完了）
+            if loaded_history:
+                st.session_state.image_history = loaded_history
+            st.session_state.history_loaded = True
 
     # 生成中はオーバーレイを表示して処理を実行
     if st.session_state.is_generating:
