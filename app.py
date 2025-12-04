@@ -19,8 +19,8 @@ from google.genai import types as genai_types
 # .envファイルから環境変数を読み込む（ローカル開発用）
 load_dotenv()
 
-# デフォルトAPIキー
-DEFAULT_API_KEY = "AIzaSyCSEw38NqlUsS36kcgTvjfCNByvB3ubYjU"
+# デフォルトAPIキー（空にしてユーザー入力必須にする）
+DEFAULT_API_KEY = ""
 
 # モデル設定
 MODELS = {
