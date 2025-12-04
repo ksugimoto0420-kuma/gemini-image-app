@@ -18,8 +18,6 @@ import streamlit as st
 from dotenv import load_dotenv
 from google import genai as genai_client
 from google.genai import types as genai_types
-from streamlit_js_eval import streamlit_js_eval
-import streamlit.components.v1 as components
 
 # .envファイルから環境変数を読み込む（ローカル開発用）
 load_dotenv()
@@ -65,7 +63,7 @@ def base64_to_pil(base64_str: str) -> Image.Image:
 
 
 def save_history_to_localstorage(history: list):
-    """履歴をLocalStorageに保存"""
+    """履歴をLocalStorageに保存（st.markdownでJS実行）"""
     # PIL ImageをBase64に変換
     serialized = []
     for item in history[:MAX_HISTORY_SIZE]:  # 最大枚数制限
@@ -76,11 +74,25 @@ def save_history_to_localstorage(history: list):
         })
 
     json_str = json.dumps(serialized)
-    # エスケープ処理（シングルクォート対策）
-    json_str_escaped = json_str.replace("\\", "\\\\").replace("'", "\\'")
-    # JavaScriptでLocalStorageに保存（ユニークキーで毎回実行）
-    key = f"save_history_{datetime.now().timestamp()}"
-    streamlit_js_eval(js_expressions=f"localStorage.setItem('image_history', '{json_str_escaped}')", key=key)
+    # エスケープ処理
+    json_str_escaped = json_str.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+
+    # st.markdownでJavaScriptを実行（親ウィンドウのLocalStorageにアクセス）
+    st.markdown(
+        f"""
+        <script>
+        (function() {{
+            try {{
+                const data = `{json_str_escaped}`;
+                localStorage.setItem('image_history', data);
+            }} catch(e) {{
+                console.error('LocalStorage save error:', e);
+            }}
+        }})();
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 def load_history_from_localstorage():
@@ -108,31 +120,47 @@ def load_history_from_localstorage():
             st.query_params.clear()
             return []
 
-    # 初回読み込み：JSでLocalStorageを読み込んでURLパラメータに設定
-    components.html(
+    # 初回読み込み：st.markdownでJS実行（親ウィンドウのLocalStorageにアクセス）
+    st.markdown(
         """
         <script>
         (function() {
-            const data = localStorage.getItem('image_history');
-            if (data && data !== 'null' && !window.location.search.includes('history_data')) {
-                const encoded = encodeURIComponent(data);
-                // データが大きすぎる場合はスキップ（URL長制限）
-                if (encoded.length < 30000) {
-                    window.location.href = window.location.pathname + '?history_data=' + encoded;
+            try {
+                const data = localStorage.getItem('image_history');
+                if (data && data !== 'null' && !window.location.search.includes('history_data')) {
+                    const encoded = encodeURIComponent(data);
+                    // データが大きすぎる場合はスキップ（URL長制限）
+                    if (encoded.length < 30000) {
+                        window.location.href = window.location.pathname + '?history_data=' + encoded;
+                    }
                 }
+            } catch(e) {
+                console.error('LocalStorage load error:', e);
             }
         })();
         </script>
         """,
-        height=0
+        unsafe_allow_html=True
     )
     return None  # 読み込み中（JSがリダイレクトする）
 
 
 def clear_localstorage_history():
     """LocalStorageの履歴をクリア"""
-    key = f"clear_history_{datetime.now().timestamp()}"
-    streamlit_js_eval(js_expressions="localStorage.removeItem('image_history')", key=key)
+    st.markdown(
+        """
+        <script>
+        (function() {
+            try {
+                localStorage.removeItem('image_history');
+            } catch(e) {
+                console.error('LocalStorage clear error:', e);
+            }
+        })();
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 def get_client(api_key: str) -> genai_client.Client:
