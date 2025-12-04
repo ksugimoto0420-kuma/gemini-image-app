@@ -19,8 +19,17 @@ from google.genai import types as genai_types
 # .envファイルから環境変数を読み込む（ローカル開発用）
 load_dotenv()
 
-# デフォルトAPIキー（空にしてユーザー入力必須にする）
-DEFAULT_API_KEY = ""
+# デフォルトAPIキー（Streamlit Cloudのシークレットまたは環境変数から取得）
+def get_default_api_key():
+    """APIキーを取得（優先順位: Streamlit secrets > 環境変数 > 空）"""
+    # Streamlit Cloudのシークレットから取得
+    try:
+        if hasattr(st, 'secrets') and 'GOOGLE_API_KEY' in st.secrets:
+            return st.secrets['GOOGLE_API_KEY']
+    except Exception:
+        pass
+    # 環境変数から取得
+    return os.getenv("GOOGLE_API_KEY", "")
 
 # モデル設定
 MODELS = {
@@ -424,7 +433,7 @@ def main():
         """, unsafe_allow_html=True)
 
         # APIキーを取得
-        default_api_key = os.getenv("GOOGLE_API_KEY", DEFAULT_API_KEY)
+        default_api_key = get_default_api_key()
         api_key = st.session_state.get("api_key", default_api_key)
         client = get_client(api_key)
 
@@ -475,7 +484,7 @@ def main():
     st.session_state.current_mode = mode
 
     # APIキーはセッションステートで管理
-    default_api_key = os.getenv("GOOGLE_API_KEY", DEFAULT_API_KEY)
+    default_api_key = get_default_api_key()
     if "api_key" not in st.session_state:
         st.session_state.api_key = default_api_key
     api_key = st.session_state.api_key
