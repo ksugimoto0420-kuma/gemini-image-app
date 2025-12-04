@@ -731,34 +731,6 @@ def main():
             else:
                 st.error("❌ 画像の生成に失敗しました。別のプロンプトを試してください。")
 
-    # --- フッター: 設定 ---
-    st.divider()
-    with st.expander("⚙️ 設定", expanded=False):
-        st.caption(f"**使用モデル:** `{MODELS['gemini_image']}` (思考モード)")
-
-        st.divider()
-
-        if st.button("🗑️ 全てクリア"):
-            st.session_state.text_generated_image = None
-            st.session_state.text_generation_complete = False
-            st.session_state.image_generated_image = None
-            st.session_state.image_generation_complete = False
-            # 保存された値をクリア
-            st.session_state.text_prompt_saved = ""
-            st.session_state.image_prompt_saved = ""
-            # ウィジェットキーを削除してクリア
-            if "text_prompt_widget" in st.session_state:
-                del st.session_state["text_prompt_widget"]
-            if "image_prompt_widget" in st.session_state:
-                del st.session_state["image_prompt_widget"]
-            # ファイルアップローダーをリセット（カウンターをインクリメント）
-            st.session_state.uploader_key_counter += 1
-            # プレビューキャッシュもクリア
-            st.session_state.preview1_cache = None
-            st.session_state.preview2_cache = None
-            st.session_state.preview1_file_id = None
-            st.session_state.preview2_file_id = None
-            st.rerun()
 
 
 if __name__ == "__main__":
