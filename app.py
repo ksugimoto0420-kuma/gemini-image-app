@@ -35,8 +35,13 @@ def get_default_api_key():
 # モデル設定
 MODELS = {
     "reasoning": "gemini-2.5-flash",           # 画像分析・プロンプト作成
-    "gemini_image": "nano-banana-pro-preview", # Gemini画像生成（日本語対応）
+    "gemini_image": "gemini-3-pro-image-preview", # Gemini画像生成（最新・高品質）
     "imagen": "imagen-4.0-generate-001",       # Imagen画像生成（写真風）
+}
+
+# 利用可能な画像生成モデル（Nano Bananaシリーズ）
+AVAILABLE_IMAGE_MODELS = {
+    "Gemini 3 Pro Image (思考モード対応)": "gemini-3-pro-image-preview",  # 最大4096px・思考モード対応
 }
 
 def get_client(api_key: str) -> genai_client.Client:
@@ -191,9 +196,14 @@ def extract_imagen_prompt(analysis_text: str) -> str:
 def generate_with_gemini(
     client: genai_client.Client,
     prompt: str,
+    model_id: str = None,
     images: list[Image.Image] = None
 ) -> Image.Image | None:
     """Geminiで画像を生成（思考モード有効・日本語テキスト対応）"""
+    # モデルIDが指定されていない場合はデフォルトを使用
+    if model_id is None:
+        model_id = MODELS["gemini_image"]
+
     # コンテンツを構築
     if images:
         image_parts = [pil_to_part(img) for img in images]
@@ -201,15 +211,17 @@ def generate_with_gemini(
     else:
         contents = prompt
 
-    response = client.models.generate_content(
-        model=MODELS["gemini_image"],
-        contents=contents,
-        config=genai_types.GenerateContentConfig(
-            response_modalities=["IMAGE", "TEXT"],
-            thinking_config=genai_types.ThinkingConfig(
-                thinking_budget=2048  # 思考トークン数
-            )
+    # Gemini 3 Pro Imageのみ思考モード対応
+    config_params = {"response_modalities": ["IMAGE", "TEXT"]}
+    if "gemini-3-pro-image" in model_id:
+        config_params["thinking_config"] = genai_types.ThinkingConfig(
+            thinking_budget=2048
         )
+
+    response = client.models.generate_content(
+        model=model_id,
+        contents=contents,
+        config=genai_types.GenerateContentConfig(**config_params)
     )
 
     # レスポンスから画像を抽出
@@ -225,22 +237,29 @@ def generate_with_gemini(
 def generate_with_gemini_thinking(
     client: genai_client.Client,
     prompt: str,
-    images: list[Image.Image]
+    images: list[Image.Image],
+    model_id: str = None
 ) -> Image.Image | None:
     """Geminiで画像を生成（思考モード有効・画像入力必須）"""
+    # モデルIDが指定されていない場合はデフォルトを使用
+    if model_id is None:
+        model_id = MODELS["gemini_image"]
+
     # コンテンツを構築
     image_parts = [pil_to_part(img) for img in images]
     contents = [prompt] + image_parts
 
-    response = client.models.generate_content(
-        model=MODELS["gemini_image"],
-        contents=contents,
-        config=genai_types.GenerateContentConfig(
-            response_modalities=["IMAGE", "TEXT"],
-            thinking_config=genai_types.ThinkingConfig(
-                thinking_budget=2048  # 思考トークン数
-            )
+    # Gemini 3 Pro Imageのみ思考モード対応
+    config_params = {"response_modalities": ["IMAGE", "TEXT"]}
+    if "gemini-3-pro-image" in model_id:
+        config_params["thinking_config"] = genai_types.ThinkingConfig(
+            thinking_budget=2048
         )
+
+    response = client.models.generate_content(
+        model=model_id,
+        contents=contents,
+        config=genai_types.GenerateContentConfig(**config_params)
     )
 
     # レスポンスから画像を抽出
@@ -306,9 +325,14 @@ def init_session_state():
         st.session_state.pending_images = None
     if "pending_mode" not in st.session_state:
         st.session_state.pending_mode = None
+    # モデル選択
+    if "selected_model" not in st.session_state:
+        st.session_state.selected_model = "Gemini 3 Pro Image (思考モード対応)"
+    if "pending_model" not in st.session_state:
+        st.session_state.pending_model = None
     # 履歴機能用（LocalStorageからの読み込みはmainで行う）
     if "image_history" not in st.session_state:
-        st.session_state.image_history = []  # [{"image": PIL.Image, "prompt": str, "timestamp": str}, ...]
+        st.session_state.image_history = []  # [{"image": PIL.Image, "prompt": str, "timestamp": str, "model": str}, ...]
     if "history_loaded" not in st.session_state:
         st.session_state.history_loaded = False
 
@@ -446,24 +470,28 @@ def main():
             prompt = st.session_state.pending_prompt
             images = st.session_state.pending_images
             pending_mode = st.session_state.pending_mode
+            model_id = st.session_state.pending_model
 
             if images:
                 # 画像加工モード
-                generated_image = generate_with_gemini_thinking(client, prompt, images)
+                generated_image = generate_with_gemini_thinking(client, prompt, images, model_id)
                 st.session_state.image_generated_image = generated_image
                 st.session_state.image_generation_complete = True
             else:
                 # テキスト生成モード
-                generated_image = generate_with_gemini(client, prompt)
+                generated_image = generate_with_gemini(client, prompt, model_id)
                 st.session_state.text_generated_image = generated_image
                 st.session_state.text_generation_complete = True
 
             # 履歴に追加（生成成功時のみ）
             if generated_image is not None:
+                # モデル名を逆引き
+                model_name = next((k for k, v in AVAILABLE_IMAGE_MODELS.items() if v == model_id), model_id)
                 st.session_state.image_history.insert(0, {
                     "image": generated_image,
                     "prompt": prompt[:100] + "..." if len(prompt) > 100 else prompt,
-                    "timestamp": datetime.now().strftime("%H:%M:%S")
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "model": model_name
                 })
                 # 最大枚数を超えたら古いものを削除（20枚まで）
                 if len(st.session_state.image_history) > 20:
@@ -510,6 +538,11 @@ def main():
     if mode == "📝 テキストから生成":
         # テキストから生成モード
         st.write("プロンプトを入力して、AIで画像を生成します")
+        st.caption("🤖 使用モデル: Gemini 3 Pro Image (思考モード・最大4096px)")
+
+        # モデルは固定（選択肢が1つのみ）
+        selected_model = "Gemini 3 Pro Image (思考モード対応)"
+        st.session_state.selected_model = selected_model
 
         # on_changeでセッションステートに保存（モード切替時も値を保持）
         def save_text_prompt():
@@ -566,12 +599,18 @@ def main():
                 st.session_state.pending_prompt = prompt
                 st.session_state.pending_images = None
                 st.session_state.pending_mode = "📝 テキストから生成"
+                st.session_state.pending_model = AVAILABLE_IMAGE_MODELS[selected_model]
                 st.session_state.is_generating = True
                 st.rerun()
 
     else:
         # 画像加工・合成モード
         st.write("画像をアップロードして、AIで加工・合成しましょう")
+        st.caption("🤖 使用モデル: Gemini 3 Pro Image (思考モード・最大4096px)")
+
+        # モデルは固定（選択肢が1つのみ）
+        selected_model = "Gemini 3 Pro Image (思考モード対応)"
+        st.session_state.selected_model = selected_model
 
         # 画像アップロード（2列レイアウト）
         col1, col2 = st.columns(2)
@@ -631,7 +670,7 @@ def main():
             "どのように加工・合成しますか？",
             value=default_image_text,
             placeholder="例: もっとカッコよくして / 2つの画像を自然に合成して夕焼けの背景にして / いい感じにして",
-            height=400,
+            height=350,
             key="image_prompt_widget",
             on_change=save_image_prompt
         )
@@ -694,6 +733,7 @@ def main():
                 st.session_state.pending_prompt = prompt
                 st.session_state.pending_images = images
                 st.session_state.pending_mode = "🖼️ 画像を加工・合成"
+                st.session_state.pending_model = AVAILABLE_IMAGE_MODELS[selected_model]
                 st.session_state.is_generating = True
                 st.rerun()
 
@@ -763,6 +803,7 @@ def main():
                     with col:
                         st.image(item["image"], use_container_width=True)
                         st.caption(f"🕐 {item['timestamp']}")
+                        st.caption(f"🤖 {item.get('model', 'Unknown')}")
                         st.caption(f"📝 {item['prompt'][:30]}..." if len(item['prompt']) > 30 else f"📝 {item['prompt']}")
 
                         # ダウンロードと削除ボタン
